@@ -1,0 +1,183 @@
+:root {
+  color-scheme: dark;
+  --bg: #11151c;
+  --panel: #19202b;
+  --panel-2: #1f2937;
+  --ink: #f3f5f7;
+  --muted: #95a2b3;
+  --line: rgba(255, 255, 255, 0.08);
+  --accent: #4ecdc4;
+  --warn: #ffd166;
+  --danger: #ff6b6b;
+  --safe: #8bd450;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 360px;
+  min-height: 440px;
+  font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(78, 205, 196, 0.24), transparent 34%),
+    linear-gradient(180deg, #10141b 0%, #151b24 100%);
+  color: var(--ink);
+}
+
+.shell {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.hero,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(25, 32, 43, 0.92);
+  backdrop-filter: blur(10px);
+}
+
+.hero {
+  padding: 16px;
+}
+
+.hero-row,
+.panel-head,
+.prediction-grid {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prediction-grid {
+  margin-top: 8px;
+}
+
+.eyebrow,
+.metric-label,
+.muted {
+  color: var(--muted);
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+}
+
+h2 {
+  font-size: 15px;
+}
+
+.pill {
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.pill.online {
+  background: rgba(139, 212, 80, 0.16);
+  color: var(--safe);
+}
+
+.pill.error {
+  background: rgba(255, 107, 107, 0.16);
+  color: var(--danger);
+}
+
+.pill.submitting,
+.pill.idle {
+  background: rgba(255, 209, 102, 0.16);
+  color: var(--warn);
+}
+
+.panel {
+  padding: 14px;
+}
+
+.panel.accent {
+  background:
+    linear-gradient(135deg, rgba(78, 205, 196, 0.14), transparent 55%),
+    rgba(31, 41, 55, 0.96);
+}
+
+.metrics {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.metric-card {
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.metric-card strong,
+.score,
+.risk {
+  display: block;
+  margin-top: 6px;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.risk {
+  font-weight: 800;
+}
+
+.risk-low {
+  color: var(--safe);
+}
+
+.risk-medium {
+  color: var(--warn);
+}
+
+.risk-high {
+  color: var(--danger);
+}
+
+.risk-neutral {
+  color: var(--muted);
+}
+
+.score {
+  color: var(--accent);
+  text-align: right;
+}
+
+.error-text {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffd3d3;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.hidden {
+  display: none;
+}

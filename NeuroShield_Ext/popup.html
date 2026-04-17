@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuro Shield</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Neuro Shield</p>
+        <div class="hero-row">
+          <div>
+            <h1>Fatigue Monitor</h1>
+            <p id="status-text" class="muted">Waiting for the first 10-second window...</p>
+          </div>
+          <span id="status-pill" class="pill idle">Idle</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Latest Window</h2>
+          <span id="updated-at" class="muted">No updates yet</span>
+        </div>
+        <div class="metrics">
+          <article class="metric-card">
+            <span class="metric-label">Keys</span>
+            <strong id="keys-value">0</strong>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Mouse</span>
+            <strong id="mouse-value">0</strong>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Switches</span>
+            <strong id="tabs-value">0</strong>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Backspace</span>
+            <strong id="backspace-value">0</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel accent">
+        <div class="panel-head">
+          <h2>Prediction</h2>
+          <span id="source-value" class="muted">No model response yet</span>
+        </div>
+        <div class="prediction-grid">
+          <div>
+            <span class="metric-label">Risk</span>
+            <div id="risk-value" class="risk risk-neutral">UNKNOWN</div>
+          </div>
+          <div>
+            <span class="metric-label">Score</span>
+            <div id="score-value" class="score">0.00</div>
+          </div>
+        </div>
+        <p id="error-text" class="error-text hidden"></p>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

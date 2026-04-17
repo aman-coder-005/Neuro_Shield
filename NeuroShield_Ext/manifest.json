@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Fatigue Tracker",
+  "version": "1.0.0",
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Neuro Shield",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "http://localhost:5000/*",
+    "http://127.0.0.1:5000/*",
+    "http://[::1]:5000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["tracker.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
