@@ -61,7 +61,7 @@ function buildFallbackResponse(input) {
   };
 }
 
-function predictWithPython({ keys, mouse_distance, tab_switches }) {
+function predictWithPython({ keys, mouse_distance, tab_switches, backspace }) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       PYTHON_RUNTIME.command,
@@ -71,6 +71,7 @@ function predictWithPython({ keys, mouse_distance, tab_switches }) {
         String(keys),
         String(mouse_distance),
         String(tab_switches),
+        String(backspace),
       ],
       {
         cwd: __dirname,
@@ -110,14 +111,26 @@ function predictWithPython({ keys, mouse_distance, tab_switches }) {
 }
 
 function validateTelemetry(body) {
-  const keys = Number(body.keys);
-  const mouseDistance = Number(body.mouse_distance);
-  const tabSwitches = Number(body.tab_switches);
+  const payload = body?.metrics
+    ? {
+        keys: body.metrics.keys ?? body.metrics.keys_pressed,
+        mouse_distance:
+          body.metrics.mouse_distance ?? body.metrics.mouse_travel_pixels,
+        tab_switches: body.metrics.tab_switches,
+        backspace: body.metrics.backspace,
+      }
+    : body;
+
+  const keys = Number(payload?.keys);
+  const mouseDistance = Number(payload?.mouse_distance);
+  const tabSwitches = Number(payload?.tab_switches);
+  const backspace = Number(payload?.backspace ?? 0);
 
   if (
     !Number.isFinite(keys) ||
     !Number.isFinite(mouseDistance) ||
-    !Number.isFinite(tabSwitches)
+    !Number.isFinite(tabSwitches) ||
+    !Number.isFinite(backspace)
   ) {
     return null;
   }
@@ -126,6 +139,7 @@ function validateTelemetry(body) {
     keys: Math.round(Number(keys)),
     mouse_distance: Number(mouseDistance),
     tab_switches: Math.round(Number(tabSwitches)),
+    backspace: Math.round(Number(backspace)),
   };
 }
 
@@ -138,7 +152,7 @@ app.post("/api/telemetry", async (req, res) => {
 
   if (!telemetry) {
     res.status(400).json({
-      error: "Invalid telemetry payload. Expected keys, mouse_distance, tab_switches.",
+      error: "Invalid telemetry payload. Expected keys, mouse_distance, tab_switches, backspace.",
     });
     return;
   }
@@ -148,6 +162,7 @@ app.post("/api/telemetry", async (req, res) => {
   try {
     const prediction = await predictWithPython(telemetry);
     responsePayload = {
+      success: true,
       risk: RISK_LABELS[prediction.risk_index] || "MEDIUM",
       score: Number(prediction.probability) || 0.5,
       risk_index: prediction.risk_index,
@@ -157,6 +172,7 @@ app.post("/api/telemetry", async (req, res) => {
     };
   } catch (error) {
     responsePayload = buildFallbackResponse(telemetry);
+    responsePayload.success = false;
     responsePayload.error = error.message;
   }
 

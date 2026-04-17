@@ -13,14 +13,14 @@ from xgboost import XGBClassifier
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "telemetry_data.csv"
 MODEL_PATH = BASE_DIR / "fatigue_model.pkl"
-FEATURE_COLUMNS = ["keys", "mouse_distance", "tab_switches"]
+FEATURE_COLUMNS = ["keys", "mouse_distance", "tab_switches", "backspace"]
 
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
-def derive_risk(keys, mouse_distance, tab_switches):
+def derive_risk(keys, mouse_distance, tab_switches, backspace):
     score = 0.0
 
     if keys < 75:
@@ -42,10 +42,23 @@ def derive_risk(keys, mouse_distance, tab_switches):
     elif tab_switches >= 10:
         score += 0.8
 
+    if backspace >= 35:
+        score += 1.3
+    elif backspace >= 18:
+        score += 0.7
+    elif backspace >= 8:
+        score += 0.3
+
     if keys < 90 and tab_switches >= 14:
         score += 1.8
 
-    if keys > 220 and mouse_distance > 320 and tab_switches < 8:
+    if backspace >= 20 and keys < 120:
+        score += 0.9
+
+    if backspace >= 24 and tab_switches >= 10:
+        score += 0.8
+
+    if keys > 220 and mouse_distance > 320 and tab_switches < 8 and backspace < 6:
         score -= 0.8
 
     if score >= 3.2:
@@ -62,20 +75,32 @@ def build_synthetic_dataset(row_count=1500):
         keys = 20 + ((index * 37 + 11) % 281)
         mouse_distance = round(15 + ((index * 29 + 7) % 486) + ((index % 9) * 0.37), 2)
         tab_switches = (index * 11 + 5) % 26
+        backspace = (index * 13 + 3) % 42
 
         if index % 10 == 0:
             keys = 30 + (index % 45)
             tab_switches = 15 + (index % 10)
+            backspace = 16 + (index % 18)
 
         if index % 14 == 0:
             keys = 210 + (index % 70)
             mouse_distance = round(280 + (index % 160) + 0.25, 2)
             tab_switches = index % 7
+            backspace = index % 6
 
         if index % 17 == 0:
             mouse_distance = round(40 + (index % 70) + 0.5, 2)
+            backspace = 10 + (index % 20)
 
-        risk = derive_risk(keys, mouse_distance, tab_switches)
+        if index % 19 == 0:
+            keys = 35 + (index % 55)
+            backspace = 20 + (index % 20)
+
+        if index % 27 == 0:
+            keys = 170 + (index % 50)
+            backspace = 2 + (index % 4)
+
+        risk = derive_risk(keys, mouse_distance, tab_switches, backspace)
 
         if index % 23 == 0 and risk > 0:
             risk -= 1
@@ -87,6 +112,7 @@ def build_synthetic_dataset(row_count=1500):
                 "keys": int(clamp(keys, 0, 400)),
                 "mouse_distance": float(round(clamp(mouse_distance, 0.0, 700.0), 2)),
                 "tab_switches": int(clamp(tab_switches, 0, 30)),
+                "backspace": int(clamp(backspace, 0, 80)),
                 "risk_index": int(clamp(risk, 0, 2)),
             }
         )
@@ -175,7 +201,7 @@ def load_model_bundle():
     return joblib.load(MODEL_PATH)
 
 
-def predict_risk(keys, mouse_distance, tab_switches):
+def predict_risk(keys, mouse_distance, tab_switches, backspace=0):
     bundle = load_model_bundle()
     model = bundle["model"]
     feature_columns = bundle["feature_columns"]
@@ -186,6 +212,7 @@ def predict_risk(keys, mouse_distance, tab_switches):
                 "keys": int(keys),
                 "mouse_distance": float(mouse_distance),
                 "tab_switches": int(tab_switches),
+                "backspace": int(backspace),
             }
         ]
     )[feature_columns]
@@ -198,11 +225,12 @@ def predict_risk(keys, mouse_distance, tab_switches):
 
 
 def main():
-    if len(sys.argv) == 4:
+    if len(sys.argv) in (4, 5):
         keys = int(sys.argv[1])
         mouse_distance = float(sys.argv[2])
         tab_switches = int(sys.argv[3])
-        print(json.dumps(predict_risk(keys, mouse_distance, tab_switches)))
+        backspace = int(sys.argv[4]) if len(sys.argv) == 5 else 0
+        print(json.dumps(predict_risk(keys, mouse_distance, tab_switches, backspace)))
         return
 
     train_and_save_model()
