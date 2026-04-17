@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -14,106 +15,185 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "telemetry_data.csv"
 MODEL_PATH = BASE_DIR / "fatigue_model.pkl"
 FEATURE_COLUMNS = ["keys", "mouse_distance", "tab_switches", "backspace"]
+FEATURE_WEIGHTS = {
+    "backspace": 0.40,
+    "tab_switches": 0.30,
+    "keys": 0.20,
+    "mouse_distance": 0.10,
+}
+RISK_THRESHOLDS = {
+    "low_max": 3.0,
+    "medium_max": 6.0,
+}
+REFERENCE_STATES = {
+    "low": {
+        "keys": "15+ with mean around 20",
+        "mouse_distance": "< 1000 with mean around 500",
+        "tab_switches": "0 to 1",
+        "backspace": "0 to 2",
+        "edge_case": "keys can be 0 when tab_switches are 0 and mouse_distance is under 500",
+    },
+    "medium": {
+        "keys": "5 to 14",
+        "mouse_distance": "1000 to 2000",
+        "tab_switches": "around 2",
+        "backspace": "3 to 5",
+    },
+    "high": {
+        "keys": "0 to 4",
+        "mouse_distance": "2000+",
+        "tab_switches": "3+",
+        "backspace": "6+",
+    },
+}
 
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
+def scale(value, low, high):
+    if high == low:
+        return 0.0
+    return clamp((value - low) / (high - low), 0.0, 1.0)
+
+
+def key_fatigue_component(keys):
+    if keys >= 15:
+        return 0.0
+    if keys >= 5:
+        return 0.35 + ((14 - keys) / 9) * 0.30
+    return 0.75 + ((4 - keys) / 4) * 0.25
+
+
+def mouse_fatigue_component(mouse_distance):
+    if mouse_distance < 1000:
+        return 0.0
+    if mouse_distance < 2000:
+        return 0.35 + scale(mouse_distance, 1000, 2000) * 0.35
+    return 0.75 + scale(mouse_distance, 2000, 3500) * 0.25
+
+
+def tab_switch_fatigue_component(tab_switches):
+    if tab_switches <= 1:
+        return 0.0
+    if tab_switches == 2:
+        return 0.45
+    return 0.75 + scale(tab_switches, 3, 6) * 0.25
+
+
+def backspace_fatigue_component(backspace):
+    if backspace <= 2:
+        return 0.0
+    if backspace <= 5:
+        return 0.40 + scale(backspace, 3, 5) * 0.25
+    return 0.75 + scale(backspace, 6, 12) * 0.25
+
+
+def fatigue_score(keys, mouse_distance, tab_switches, backspace):
+    keys = int(clamp(keys, 0, 80))
+    mouse_distance = float(clamp(mouse_distance, 0.0, 5000.0))
+    tab_switches = int(clamp(tab_switches, 0, 15))
+    backspace = int(clamp(backspace, 0, 25))
+
+    reading_or_thinking = (
+        keys == 0
+        and tab_switches == 0
+        and mouse_distance < 500
+        and backspace <= 2
+    )
+
+    components = {
+        "keys": key_fatigue_component(keys),
+        "mouse_distance": mouse_fatigue_component(mouse_distance),
+        "tab_switches": tab_switch_fatigue_component(tab_switches),
+        "backspace": backspace_fatigue_component(backspace),
+    }
+    weighted_score = sum(
+        components[name] * FEATURE_WEIGHTS[name] for name in FEATURE_COLUMNS
+    ) * 10
+
+    if keys <= 4 and tab_switches >= 3:
+        weighted_score += 1.0
+    if keys <= 4 and backspace >= 6:
+        weighted_score += 0.8
+    if tab_switches >= 3 and mouse_distance >= 2000:
+        weighted_score += 0.6
+    if backspace >= 6 and tab_switches >= 3:
+        weighted_score += 0.6
+
+    if keys >= 15 and mouse_distance < 1000 and tab_switches <= 1 and backspace <= 2:
+        weighted_score -= 0.6
+    if reading_or_thinking:
+        weighted_score = min(weighted_score, 1.2)
+
+    return round(float(clamp(weighted_score, 0.0, 10.0)), 4)
+
+
 def derive_risk(keys, mouse_distance, tab_switches, backspace):
-    score = 0.0
+    score = fatigue_score(keys, mouse_distance, tab_switches, backspace)
 
-    if keys < 75:
-        score += 1.5
-    elif keys < 150:
-        score += 1.0
-    else:
-        score -= 0.2
-
-    if mouse_distance < 120:
-        score += 1.0
-    elif mouse_distance < 260:
-        score += 0.5
-    else:
-        score -= 0.2
-
-    if tab_switches >= 18:
-        score += 1.5
-    elif tab_switches >= 10:
-        score += 0.8
-
-    if backspace >= 35:
-        score += 1.3
-    elif backspace >= 18:
-        score += 0.7
-    elif backspace >= 8:
-        score += 0.3
-
-    if keys < 90 and tab_switches >= 14:
-        score += 1.8
-
-    if backspace >= 20 and keys < 120:
-        score += 0.9
-
-    if backspace >= 24 and tab_switches >= 10:
-        score += 0.8
-
-    if keys > 220 and mouse_distance > 320 and tab_switches < 8 and backspace < 6:
-        score -= 0.8
-
-    if score >= 3.2:
+    if score >= RISK_THRESHOLDS["medium_max"]:
         return 2
-    if score >= 1.7:
+    if score >= RISK_THRESHOLDS["low_max"]:
         return 1
     return 0
 
 
 def build_synthetic_dataset(row_count=1500):
     records = []
+    rng = np.random.default_rng(42)
+    rows_per_state = row_count // 3
 
     for index in range(row_count):
-        keys = 20 + ((index * 37 + 11) % 281)
-        mouse_distance = round(15 + ((index * 29 + 7) % 486) + ((index % 9) * 0.37), 2)
-        tab_switches = (index * 11 + 5) % 26
-        backspace = (index * 13 + 3) % 42
+        state = min(index // rows_per_state, 2)
 
-        if index % 10 == 0:
-            keys = 30 + (index % 45)
-            tab_switches = 15 + (index % 10)
-            backspace = 16 + (index % 18)
+        if state == 0:
+            if index % 12 == 0:
+                keys = 0
+                mouse_distance = rng.normal(260, 110)
+                tab_switches = 0
+                backspace = rng.integers(0, 2)
+            else:
+                keys = rng.normal(20, 5)
+                mouse_distance = rng.normal(500, 220)
+                tab_switches = rng.choice([0, 0, 0, 1])
+                backspace = rng.choice([0, 0, 1, 1, 2])
+        elif state == 1:
+            keys = rng.normal(9.5, 3.0)
+            mouse_distance = rng.normal(1500, 260)
+            tab_switches = rng.choice([1, 2, 2, 2, 3])
+            backspace = rng.choice([2, 3, 4, 5, 6])
+        else:
+            keys = rng.normal(2.2, 1.8)
+            mouse_distance = rng.normal(2600, 520)
+            tab_switches = rng.choice([3, 3, 4, 5, 6, 7])
+            backspace = rng.choice([6, 7, 8, 9, 10, 12, 14])
 
-        if index % 14 == 0:
-            keys = 210 + (index % 70)
-            mouse_distance = round(280 + (index % 160) + 0.25, 2)
-            tab_switches = index % 7
-            backspace = index % 6
+        if index % 29 == 0:
+            mouse_distance += rng.normal(650, 160)
+        if index % 37 == 0:
+            backspace += 2
+        if index % 43 == 0:
+            tab_switches += 1
+        if index % 53 == 0:
+            keys += rng.normal(5, 2)
 
-        if index % 17 == 0:
-            mouse_distance = round(40 + (index % 70) + 0.5, 2)
-            backspace = 10 + (index % 20)
-
-        if index % 19 == 0:
-            keys = 35 + (index % 55)
-            backspace = 20 + (index % 20)
-
-        if index % 27 == 0:
-            keys = 170 + (index % 50)
-            backspace = 2 + (index % 4)
-
+        keys = int(round(clamp(keys, 0, 80)))
+        mouse_distance = float(round(clamp(mouse_distance, 0.0, 5000.0), 2))
+        tab_switches = int(clamp(tab_switches, 0, 15))
+        backspace = int(clamp(backspace, 0, 25))
+        score = fatigue_score(keys, mouse_distance, tab_switches, backspace)
         risk = derive_risk(keys, mouse_distance, tab_switches, backspace)
-
-        if index % 23 == 0 and risk > 0:
-            risk -= 1
-        elif index % 31 == 0 and risk < 2:
-            risk += 1
 
         records.append(
             {
-                "keys": int(clamp(keys, 0, 400)),
-                "mouse_distance": float(round(clamp(mouse_distance, 0.0, 700.0), 2)),
-                "tab_switches": int(clamp(tab_switches, 0, 30)),
-                "backspace": int(clamp(backspace, 0, 80)),
-                "risk_index": int(clamp(risk, 0, 2)),
+                "keys": keys,
+                "mouse_distance": mouse_distance,
+                "tab_switches": tab_switches,
+                "backspace": backspace,
+                "fatigue_score": score,
+                "risk_index": risk,
             }
         )
 
@@ -177,6 +257,9 @@ def train_and_save_model(verbose=True):
             "model_name": best_name,
             "accuracy": best_accuracy,
             "feature_columns": FEATURE_COLUMNS,
+            "feature_weights": FEATURE_WEIGHTS,
+            "risk_thresholds": RISK_THRESHOLDS,
+            "reference_states": REFERENCE_STATES,
             "model": best_model,
         },
         MODEL_PATH,
@@ -190,6 +273,9 @@ def train_and_save_model(verbose=True):
                     "model_path": str(MODEL_PATH),
                     "best_model": best_name,
                     "accuracy": round(best_accuracy, 4),
+                    "feature_weights": FEATURE_WEIGHTS,
+                    "risk_thresholds": RISK_THRESHOLDS,
+                    "class_distribution": dataset["risk_index"].value_counts().sort_index().to_dict(),
                 }
             )
         )
@@ -220,8 +306,13 @@ def predict_risk(keys, mouse_distance, tab_switches, backspace=0):
     risk_index = int(model.predict(frame)[0])
     probabilities = model.predict_proba(frame)[0]
     probability = round(float(probabilities[risk_index]), 4)
+    score = fatigue_score(keys, mouse_distance, tab_switches, backspace)
 
-    return {"risk_index": risk_index, "probability": probability}
+    return {
+        "risk_index": risk_index,
+        "probability": probability,
+        "fatigue_score": score,
+    }
 
 
 def main():

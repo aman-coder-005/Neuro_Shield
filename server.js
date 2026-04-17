@@ -5,9 +5,10 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const PORT = 5000;
+const PORT = 5001;
 const MAX_LOGS = 100;
 const logs = [];
+const FRONTEND_DIST = path.join(__dirname, "frontend", "dist");
 
 const RISK_LABELS = {
   0: "LOW",
@@ -54,6 +55,8 @@ function buildFallbackResponse(input) {
   return {
     risk: "MEDIUM",
     score: 0.5,
+    fatigue_score: 5,
+    model_probability: 0.5,
     risk_index: 1,
     telemetry: input,
     source: "fallback",
@@ -143,7 +146,7 @@ function validateTelemetry(body) {
   };
 }
 
-app.get("/", (_req, res) => {
+app.get("/api/health", (_req, res) => {
   res.json({ status: "online" });
 });
 
@@ -164,7 +167,9 @@ app.post("/api/telemetry", async (req, res) => {
     responsePayload = {
       success: true,
       risk: RISK_LABELS[prediction.risk_index] || "MEDIUM",
-      score: Number(prediction.probability) || 0.5,
+      score: Number(prediction.fatigue_score) / 10 || 0,
+      fatigue_score: Number(prediction.fatigue_score) || 0,
+      model_probability: Number(prediction.probability) || 0.5,
       risk_index: prediction.risk_index,
       telemetry,
       source: "model",
@@ -193,6 +198,23 @@ app.get("/api/telemetry", (_req, res) => {
 app.get("/api/logs", (_req, res) => {
   res.json(logs);
 });
+
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      next();
+      return;
+    }
+
+    res.sendFile(path.join(FRONTEND_DIST, "index.html"));
+  });
+} else {
+  app.get("/", (_req, res) => {
+    res.json({ status: "online", frontend: "not-built" });
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Fatigue backend listening on http://localhost:${PORT}`);

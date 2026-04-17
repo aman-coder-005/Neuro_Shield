@@ -1,10 +1,10 @@
 (() => {
-  const PREDICTION_WINDOW_MS = 10000;
+  const PREDICTION_WINDOW_MS = 5000;
   const ACTIVITY_SYNC_DEBOUNCE_MS = 250;
   const TELEMETRY_ENDPOINTS = [
-    "http://localhost:5000/api/telemetry",
-    "http://127.0.0.1:5000/api/telemetry",
-    "http://[::1]:5000/api/telemetry"
+    "http://localhost:5001/api/telemetry",
+    "http://127.0.0.1:5001/api/telemetry",
+    "http://[::1]:5001/api/telemetry"
   ];
   const DEFAULT_ACTIVITY_STATE = {
     keys: 0,

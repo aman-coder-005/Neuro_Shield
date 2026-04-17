@@ -791,7 +791,7 @@ function App() {
     };
 
     fetchTelemetry();
-    const cycle = window.setInterval(fetchTelemetry, 5000);
+    const cycle = window.setInterval(fetchTelemetry, 2000);
 
     return () => window.clearInterval(cycle);
   }, []);
@@ -922,7 +922,7 @@ function App() {
             </div>
             <div className="flex flex-wrap gap-3 text-sm text-slate-300">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">Mode: {mode}</span>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">Live updates: every 5s</span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">Live updates: every 2s</span>
             </div>
           </div>
         </footer>

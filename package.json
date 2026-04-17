@@ -4,7 +4,9 @@
   "description": "Hackathon-ready fatigue prediction backend using Node.js and Python ML.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build"
   },
   "dependencies": {
     "cors": "^2.8.5",

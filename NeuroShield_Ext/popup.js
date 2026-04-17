@@ -27,8 +27,8 @@ const elements = {
 };
 
 const statusCopy = {
-  idle: "Waiting for the first 10-second window...",
-  submitting: "Collecting the latest 10-second window...",
+  idle: "Waiting for the first 5-second window...",
+  submitting: "Collecting the latest 5-second window...",
   online: "Model connected and responding.",
   error: "Last submission hit an error."
 };
