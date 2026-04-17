@@ -47,6 +47,12 @@ const riskStyles = {
     label: "High fatigue likelihood",
     action: "Take a break now. The model sees stacked fatigue signals.",
   },
+  WAITING: {
+    color: "#94a3b8",
+    soft: "rgba(148, 163, 184, 0.12)",
+    label: "Collecting 30-second batch",
+    action: "Waiting for six 5-second windows before showing the overall prediction.",
+  },
   UNKNOWN: {
     color: "#94a3b8",
     soft: "rgba(148, 163, 184, 0.12)",
@@ -139,8 +145,9 @@ function clampPercent(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-function getLatestTelemetry(logs) {
+function getLatestTelemetry(logs, overall) {
   const latest = logs.at(-1);
+  const hasOverallPrediction = Boolean(overall?.has_prediction);
 
   if (!latest) {
     return {
@@ -151,8 +158,10 @@ function getLatestTelemetry(logs) {
         tab_switches: 0,
         backspace: 0,
       },
-      risk: "UNKNOWN",
-      score: 0,
+      risk: hasOverallPrediction ? overall.risk : "WAITING",
+      score: hasOverallPrediction && Number.isFinite(Number(overall?.fatigue_score))
+        ? Number(overall.fatigue_score) / 10
+        : 0,
     };
   }
 
@@ -164,15 +173,26 @@ function getLatestTelemetry(logs) {
       tab_switches: Number(latest.telemetry?.tab_switches || 0),
       backspace: Number(latest.telemetry?.backspace || 0),
     },
-    risk: latest.risk || "UNKNOWN",
-    score: Number.isFinite(Number(latest.fatigue_score))
-      ? Number(latest.fatigue_score) / 10
-      : Number(latest.score || 0),
+    risk: hasOverallPrediction ? overall.risk : "WAITING",
+    score: hasOverallPrediction && Number.isFinite(Number(overall?.fatigue_score))
+      ? Number(overall.fatigue_score) / 10
+      : 0,
   };
 }
 
 function buildTrend(logs) {
-  const scores = logs.slice(-8).map((entry) => clampPercent(Number(entry.score || 0) * 100));
+  const seenEvaluations = new Set();
+  const scores = logs
+    .filter((entry) => {
+      const evaluationId = entry.overall?.evaluations_completed;
+      if (!entry.overall?.has_prediction || !evaluationId || seenEvaluations.has(evaluationId)) {
+        return false;
+      }
+      seenEvaluations.add(evaluationId);
+      return true;
+    })
+    .slice(-8)
+    .map((entry) => clampPercent(Number(entry.score || 0) * 100));
   return [...EMPTY_TREND.slice(scores.length), ...scores];
 }
 
@@ -227,9 +247,9 @@ function TrendPanel({ trend, risk }) {
       <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-400">Live Trend</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold text-white">Fatigue Score Over Time</h2>
+          <h2 className="mt-2 font-display text-3xl font-semibold text-white">Rolling 30-Second Score</h2>
         </div>
-        <span className="rounded-full border border-white/10 px-3 py-1.5 text-sm text-slate-300">Polls every 5s</span>
+        <span className="rounded-full border border-white/10 px-3 py-1.5 text-sm text-slate-300">6 windows x 5s</span>
       </div>
       <div className="h-72 rounded-[28px] border border-white/8 bg-[#07111f]/80 p-4">
         <svg viewBox="0 0 760 240" className="h-full w-full overflow-visible">
@@ -256,12 +276,20 @@ function TrendPanel({ trend, risk }) {
   );
 }
 
-function Overview({ apiStatus, apiError, logs, latest, latestTimestamp, latestSource, risk, riskLevel, scorePercent, telemetry }) {
+function Overview({ apiStatus, apiError, logs, latest, latestTimestamp, latestSource, overall, risk, riskLevel, scorePercent, telemetry }) {
+  const hasOverallPrediction = Boolean(overall?.has_prediction);
+  const windowsCollected = Number(overall?.windows_collected || 0);
+  const windowsRequired = Number(overall?.windows_required || 6);
+  const windowsRemaining = Math.max(0, windowsRequired - windowsCollected);
   const zeroWindow =
     telemetry.keys === 0 &&
     telemetry.mouse_distance === 0 &&
     telemetry.tab_switches === 0 &&
     telemetry.backspace === 0;
+  const latestWindowRisk = latest?.window_risk || "WAITING";
+  const latestWindowScore = Number.isFinite(Number(latest?.window_fatigue_score))
+    ? Math.round(Number(latest.window_fatigue_score) * 10)
+    : 0;
   const gaugeStyle = {
     background: `conic-gradient(${risk.color} ${scorePercent * 3.6}deg, rgba(255,255,255,0.08) 0deg)`,
   };
@@ -297,16 +325,24 @@ function Overview({ apiStatus, apiError, logs, latest, latestTimestamp, latestSo
                 Extension telemetry, Python model, and dashboard in one loop.
               </h2>
               <p className="mt-4 max-w-xl text-base leading-7 text-slate-300">
-                Every 5 seconds the extension sends keys, mouse movement, tab switches, and backspace count to the Node API. The API calls the trained Python model and this dashboard reads the latest prediction.
+                Every 5 seconds the extension sends one model window. The backend combines the latest six windows into a rolling 30-second fatigue score, so risk does not instantly reset when one idle window arrives.
               </p>
-              <div className="mt-8 grid gap-4 sm:grid-cols-3">
+              <div className="mt-8 grid gap-4 sm:grid-cols-4">
                 <div className="rounded-3xl border border-white/10 bg-white/6 px-5 py-4">
-                  <p className="text-sm text-slate-400">Fatigue Score</p>
-                  <div className="font-display text-4xl font-bold">{scorePercent}%</div>
+                  <p className="text-sm text-slate-400">Rolling Fatigue Score</p>
+                  <div className="font-display text-4xl font-bold">{hasOverallPrediction ? `${scorePercent}%` : "WAIT"}</div>
                 </div>
                 <div className="rounded-3xl border border-white/10 bg-white/6 px-5 py-4">
-                  <p className="text-sm text-slate-400">Windows Logged</p>
-                  <div className="font-display text-4xl font-bold">{logs.length}</div>
+                  <p className="text-sm text-slate-400">Latest 5s Model</p>
+                  <div className="font-display text-3xl font-bold">{latestWindowRisk}</div>
+                  <p className="mt-1 text-xs text-slate-500">{latestWindowScore}% window score</p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-white/6 px-5 py-4">
+                  <p className="text-sm text-slate-400">30s Windows Used</p>
+                  <div className="font-display text-4xl font-bold">{windowsCollected}/{windowsRequired}</div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {hasOverallPrediction ? `${windowsRemaining} windows until next update` : `${windowsRemaining} windows until first prediction`}
+                  </p>
                 </div>
                 <div className="rounded-3xl border border-white/10 bg-white/6 px-5 py-4">
                   <p className="text-sm text-slate-400">Model Source</p>
@@ -318,13 +354,17 @@ function Overview({ apiStatus, apiError, logs, latest, latestTimestamp, latestSo
             <div className="flex flex-col items-center justify-center gap-5">
               <div className="gauge-ring relative flex h-72 w-72 items-center justify-center rounded-full" style={gaugeStyle}>
                 <div className="relative z-10 text-center">
-                  <p className="text-sm uppercase tracking-[0.35em] text-slate-400">Live Score</p>
-                  <div className="mt-3 font-display text-6xl font-bold">{scorePercent}</div>
+                  <p className="text-sm uppercase tracking-[0.35em] text-slate-400">30s Score</p>
+                  <div className="mt-3 font-display text-6xl font-bold">{hasOverallPrediction ? scorePercent : "--"}</div>
                   <p className="mt-2 text-sm text-slate-400">Updated: {formatTime(latestTimestamp)}</p>
                 </div>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm text-slate-300">
-                {!latest ? "Waiting for first extension submission." : zeroWindow ? "No activity in the latest window, but monitoring continues." : risk.action}
+                {!hasOverallPrediction
+                  ? `Waiting for prediction: ${windowsCollected}/${windowsRequired} windows collected.`
+                  : zeroWindow
+                  ? "Latest 5s window is idle. The 30s score will update only after the full batch completes."
+                  : risk.action}
               </div>
             </div>
           </div>
@@ -332,7 +372,10 @@ function Overview({ apiStatus, apiError, logs, latest, latestTimestamp, latestSo
 
         <div className="glass-card rounded-[34px] p-6">
           <p className="text-sm uppercase tracking-[0.3em] text-slate-400">Current Window</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold text-white">Raw Model Inputs</h2>
+          <h2 className="mt-2 font-display text-3xl font-semibold text-white">Latest 5s Inputs</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            These raw values update every 5 seconds. The main risk badge and gauge are smoothed through the rolling 30-second score.
+          </p>
           <div className="mt-6 grid gap-3">
             {metricDefinitions.map((metric) => (
               <div key={metric.key} className="flex items-center justify-between rounded-3xl border border-white/8 bg-white/4 px-4 py-4">
@@ -365,6 +408,7 @@ function LiveDashboard() {
   const [apiError, setApiError] = useState("");
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
+  const [overall, setOverall] = useState(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -390,6 +434,7 @@ function LiveDashboard() {
 
         if (!cancelled) {
           setLogs(nextLogs);
+          setOverall(payload.overall || null);
           setApiStatus("online");
           setApiError("");
           setLastFetchedAt(new Date().toISOString());
@@ -411,7 +456,7 @@ function LiveDashboard() {
     };
   }, []);
 
-  const { latest, telemetry, risk: riskLevel, score } = getLatestTelemetry(logs);
+  const { latest, telemetry, risk: riskLevel, score } = getLatestTelemetry(logs, overall);
   const risk = riskStyles[riskLevel] || riskStyles.UNKNOWN;
   const trend = useMemo(() => buildTrend(logs), [logs]);
   const scorePercent = clampPercent(score * 100);
@@ -427,6 +472,7 @@ function LiveDashboard() {
         latest={latest}
         latestTimestamp={latestTimestamp}
         latestSource={latestSource}
+        overall={overall}
         risk={risk}
         riskLevel={riskLevel}
         scorePercent={scorePercent}
@@ -455,7 +501,7 @@ function LiveDashboard() {
         <p className="text-sm uppercase tracking-[0.3em] text-slate-400">Risk Logic</p>
         <h2 className="mt-2 font-display text-3xl font-semibold text-white">Model Conditions For A Normal Worker</h2>
         <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">
-          The Python model is trained on 5-second telemetry windows. A normal focused user usually has steady typing, some mouse movement, very few tab switches, and low backspace count.
+          The Python model predicts every 5 seconds, while the dashboard risk uses the backend's rolling 30-second score from the latest six predictions.
         </p>
         <div className="mt-6 grid gap-4 lg:grid-cols-3">
           {riskRules.map((rule) => {
@@ -486,7 +532,7 @@ function LiveDashboard() {
             <div>
               <p className="font-display text-2xl font-semibold text-white">{risk.action}</p>
               <p className="mt-2 text-sm leading-7 text-slate-400">
-                The recommendation updates automatically as the extension submits new 5-second windows.
+                The recommendation updates automatically from the rolling 30-second fatigue score.
               </p>
             </div>
           </div>
@@ -569,7 +615,7 @@ function LiveDashboard() {
             </div>
             <div className="flex flex-wrap gap-3 text-sm text-slate-300">
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">Backend: {API_BASE || "same-origin"}</span>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">Updates: every 5s</span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">Score: rolling 30s</span>
             </div>
           </div>
         </footer>

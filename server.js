@@ -7,13 +7,40 @@ const path = require("path");
 const app = express();
 const PORT = 5001;
 const MAX_LOGS = 100;
+const EVALUATION_WINDOW_SIZE = 6;
+const HIGH_RISK_THRESHOLD = 6;
+const MEDIUM_RISK_THRESHOLD = 3;
+const RAPID_RISE_THRESHOLD = 3;
+const IDLE_DECAY_PER_EVALUATION = 1.2;
 const logs = [];
+let evaluationBatch = [];
+let overallState = {
+  has_prediction: false,
+  status: "collecting",
+  fatigue_score: 0,
+  score: 0,
+  risk: "WAITING",
+  risk_index: null,
+  trend_delta: 0,
+  windows_collected: 0,
+  windows_required: EVALUATION_WINDOW_SIZE,
+  evaluations_completed: 0,
+  batch_average: 0,
+  updated_at: null,
+};
 const FRONTEND_DIST = path.join(__dirname, "frontend", "dist");
 
 const RISK_LABELS = {
   0: "LOW",
   1: "MEDIUM",
   2: "HIGH",
+};
+
+const RISK_INDEX_BY_LABEL = {
+  LOW: 0,
+  MEDIUM: 1,
+  HIGH: 2,
+  WAITING: null,
 };
 
 const PYTHON_SCRIPT = path.join(__dirname, "train_and_predict.py");
@@ -53,15 +80,130 @@ function trimLogs() {
 
 function buildFallbackResponse(input) {
   return {
-    risk: "MEDIUM",
-    score: 0.5,
-    fatigue_score: 5,
+    window_risk: "MEDIUM",
+    window_score: 0.5,
+    window_fatigue_score: 5,
     model_probability: 0.5,
-    risk_index: 1,
+    window_risk_index: 1,
     telemetry: input,
     source: "fallback",
     timestamp: new Date().toISOString(),
   };
+}
+
+function roundScore(value) {
+  return Math.round(Number(value) * 10000) / 10000;
+}
+
+function isIdleTelemetry(telemetry) {
+  return (
+    telemetry.keys === 0 &&
+    telemetry.mouse_distance === 0 &&
+    telemetry.tab_switches === 0 &&
+    telemetry.backspace === 0
+  );
+}
+
+function average(values) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function riskFromFatigueScore(score, trendDelta = 0) {
+  if (score >= HIGH_RISK_THRESHOLD || trendDelta >= RAPID_RISE_THRESHOLD) {
+    return "HIGH";
+  }
+
+  if (score >= MEDIUM_RISK_THRESHOLD) {
+    return "MEDIUM";
+  }
+
+  return "LOW";
+}
+
+function resetRollingState() {
+  evaluationBatch = [];
+  overallState = {
+    has_prediction: false,
+    status: "collecting",
+    fatigue_score: 0,
+    score: 0,
+    risk: "WAITING",
+    risk_index: null,
+    trend_delta: 0,
+    windows_collected: 0,
+    windows_required: EVALUATION_WINDOW_SIZE,
+    evaluations_completed: 0,
+    batch_average: 0,
+    updated_at: null,
+  };
+}
+
+function getOverallCollectionState(status) {
+  const nextStatus =
+    status ||
+    (overallState.has_prediction ? "collecting_next" : "collecting");
+
+  return {
+    ...overallState,
+    status: nextStatus,
+    windows_collected: evaluationBatch.length,
+    windows_required: EVALUATION_WINDOW_SIZE,
+  };
+}
+
+function evaluateThirtySecondBatch() {
+  const completedBatch = evaluationBatch.slice(0, EVALUATION_WINDOW_SIZE);
+  const scores = completedBatch.map((entry) => Number(entry.window_fatigue_score || 0));
+  const batchAverage = average(scores);
+  const batchIsIdle = completedBatch.every((entry) => isIdleTelemetry(entry.telemetry));
+  const previousScore = Number(overallState.fatigue_score || 0);
+  const trendDelta = overallState.has_prediction ? batchAverage - previousScore : 0;
+  let nextScore = batchAverage;
+
+  if (overallState.has_prediction) {
+    if (batchIsIdle) {
+      nextScore = Math.max(batchAverage, previousScore - IDLE_DECAY_PER_EVALUATION);
+    } else if (batchAverage >= previousScore) {
+      nextScore = previousScore * 0.45 + batchAverage * 0.55;
+    } else {
+      nextScore = previousScore * 0.75 + batchAverage * 0.25;
+    }
+  }
+
+  nextScore = roundScore(Math.max(0, Math.min(10, nextScore)));
+  const risk = riskFromFatigueScore(nextScore, trendDelta);
+
+  overallState = {
+    has_prediction: true,
+    status: "evaluated",
+    fatigue_score: nextScore,
+    score: roundScore(nextScore / 10),
+    risk,
+    risk_index: RISK_INDEX_BY_LABEL[risk],
+    trend_delta: roundScore(trendDelta),
+    windows_collected: EVALUATION_WINDOW_SIZE,
+    windows_required: EVALUATION_WINDOW_SIZE,
+    evaluations_completed: Number(overallState.evaluations_completed || 0) + 1,
+    batch_average: roundScore(batchAverage),
+    updated_at: new Date().toISOString(),
+  };
+
+  evaluationBatch = evaluationBatch.slice(EVALUATION_WINDOW_SIZE);
+  return overallState;
+}
+
+function addWindowAndMaybeEvaluate(windowResult) {
+  evaluationBatch.push(windowResult);
+
+  if (evaluationBatch.length >= EVALUATION_WINDOW_SIZE) {
+    return evaluateThirtySecondBatch();
+  }
+
+  return getOverallCollectionState("collecting");
 }
 
 function predictWithPython({ keys, mouse_distance, tab_switches, backspace }) {
@@ -164,13 +306,14 @@ app.post("/api/telemetry", async (req, res) => {
 
   try {
     const prediction = await predictWithPython(telemetry);
+    const windowFatigueScore = Number(prediction.fatigue_score) || 0;
     responsePayload = {
       success: true,
-      risk: RISK_LABELS[prediction.risk_index] || "MEDIUM",
-      score: Number(prediction.fatigue_score) / 10 || 0,
-      fatigue_score: Number(prediction.fatigue_score) || 0,
+      window_risk: RISK_LABELS[prediction.risk_index] || "MEDIUM",
+      window_score: roundScore(windowFatigueScore / 10),
+      window_fatigue_score: windowFatigueScore,
       model_probability: Number(prediction.probability) || 0.5,
-      risk_index: prediction.risk_index,
+      window_risk_index: prediction.risk_index,
       telemetry,
       source: "model",
       timestamp: new Date().toISOString(),
@@ -180,6 +323,18 @@ app.post("/api/telemetry", async (req, res) => {
     responsePayload.success = false;
     responsePayload.error = error.message;
   }
+
+  const overall = addWindowAndMaybeEvaluate(responsePayload);
+  const hasOverallPrediction = Boolean(overall.has_prediction);
+
+  responsePayload = {
+    ...responsePayload,
+    risk: hasOverallPrediction ? overall.risk : "WAITING",
+    score: hasOverallPrediction ? overall.score : null,
+    fatigue_score: hasOverallPrediction ? overall.fatigue_score : null,
+    risk_index: hasOverallPrediction ? overall.risk_index : null,
+    overall,
+  };
 
   logs.push(responsePayload);
   trimLogs();
@@ -191,12 +346,19 @@ app.get("/api/telemetry", (_req, res) => {
   res.json({
     success: true,
     count: logs.length,
+    overall: getOverallCollectionState(overallState.status),
     data: logs,
   });
 });
 
 app.get("/api/logs", (_req, res) => {
   res.json(logs);
+});
+
+app.post("/api/reset", (_req, res) => {
+  logs.splice(0, logs.length);
+  resetRollingState();
+  res.json({ success: true, overall: getOverallCollectionState() });
 });
 
 if (fs.existsSync(FRONTEND_DIST)) {

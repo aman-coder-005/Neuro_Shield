@@ -9,8 +9,10 @@
     "default_title": "Neuro Shield",
     "default_popup": "popup.html"
   },
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "scripting"],
   "host_permissions": [
+    "http://*/*",
+    "https://*/*",
     "http://localhost:5001/*",
     "http://127.0.0.1:5001/*",
     "http://[::1]:5001/*"

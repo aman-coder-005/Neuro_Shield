@@ -58,6 +58,36 @@ const setPopupState = async (nextState) => {
   });
 };
 
+const isInjectableUrl = (url = "") =>
+  url.startsWith("http://") || url.startsWith("https://");
+
+const injectTrackerIntoTab = async (tabId, url) => {
+  if (!tabId || !isInjectableUrl(url)) {
+    return;
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: {
+        tabId,
+        allFrames: false
+      },
+      files: ["tracker.js"]
+    });
+  } catch (error) {
+    console.debug("NeuroShield tracker injection skipped:", error.message);
+  }
+};
+
+const injectTrackerIntoOpenTabs = async () => {
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(tabs.map((tab) => injectTrackerIntoTab(tab.id, tab.url)));
+  } catch (error) {
+    console.debug("NeuroShield open-tab injection skipped:", error.message);
+  }
+};
+
 const getActiveContextForWindow = async (windowId) => {
   const tabs = await chrome.tabs.query({ active: true, windowId });
   const [tab] = tabs;
@@ -117,14 +147,18 @@ const incrementTabSwitches = async (nextContext) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   initializeExtensionState();
+  injectTrackerIntoOpenTabs();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   initializeExtensionState();
+  injectTrackerIntoOpenTabs();
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    await injectTrackerIntoTab(tab.id, tab.url);
     await incrementTabSwitches({
       windowId: activeInfo.windowId,
       tabId: activeInfo.tabId
@@ -132,6 +166,14 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   } catch (error) {
     console.error("Failed to record tab activation:", error);
   }
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") {
+    return;
+  }
+
+  await injectTrackerIntoTab(tabId, tab.url);
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {

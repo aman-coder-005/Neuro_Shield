@@ -47,6 +47,7 @@
   let localKeys = 0;
   let localMouseDistance = 0;
   let localBackspace = 0;
+  let isFlushInProgress = false;
 
   const teardown = () => {
     if (!isExtensionActive) {
@@ -163,6 +164,38 @@
     });
   };
 
+  const consumeSnapshotCounters = async (snapshot) => {
+    const latestActivity = await readLocalStorage(
+      "neuroShieldActivity",
+      DEFAULT_ACTIVITY_STATE
+    );
+    const latestExtensionState = await readLocalStorage(
+      "neuroShieldState",
+      DEFAULT_EXTENSION_STATE
+    );
+
+    await writeLocalStorage("neuroShieldActivity", {
+      keys: Math.max(0, Number(latestActivity.keys || 0) - Number(snapshot.keys || 0)),
+      mouse_distance: Math.max(
+        0,
+        Number(latestActivity.mouse_distance || 0) - Number(snapshot.mouse_distance || 0)
+      ),
+      backspace: Math.max(
+        0,
+        Number(latestActivity.backspace || 0) - Number(snapshot.backspace || 0)
+      )
+    });
+
+    await writeLocalStorage("neuroShieldState", {
+      ...latestExtensionState,
+      tabSwitches: Math.max(
+        0,
+        Number(latestExtensionState.tabSwitches || 0) -
+          Number(snapshot.tab_switches || 0)
+      )
+    });
+  };
+
   const postTelemetry = async (snapshot) => {
     let lastError = null;
 
@@ -195,10 +228,13 @@
   };
 
   const attemptTelemetryFlush = async () => {
-    if (!isExtensionActive || !hasExtensionAccess()) {
+    if (!isExtensionActive || !hasExtensionAccess() || isFlushInProgress) {
       return;
     }
 
+    isFlushInProgress = true;
+
+    try {
     await persistLocalActivity();
 
     const lock = await readLocalStorage("neuroShieldFlushState", {
@@ -239,11 +275,7 @@
     const result = await postTelemetry(snapshot);
 
     if (result.ok) {
-      await writeLocalStorage("neuroShieldActivity", DEFAULT_ACTIVITY_STATE);
-      await writeLocalStorage("neuroShieldState", {
-        ...extensionState,
-        tabSwitches: 0
-      });
+      await consumeSnapshotCounters(snapshot);
       await updatePopupState({
         lastSnapshot: snapshot,
         lastPrediction: result.result,
@@ -263,6 +295,17 @@
       lastUpdatedAt: new Date().toISOString()
     });
     console.error("Telemetry submit failed:", result.error);
+    } finally {
+      isFlushInProgress = false;
+    }
+  };
+
+  const isCountableKey = (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      return false;
+    }
+
+    return event.key.length === 1 || event.key === "Enter";
   };
 
   const handleKeydown = (event) => {
@@ -274,9 +317,10 @@
       return;
     }
 
-    localKeys += 1;
-    if (event.key === "Backspace") {
+    if (event.key === "Backspace" || event.key === "Delete") {
       localBackspace += 1;
+    } else if (isCountableKey(event)) {
+      localKeys += 1;
     }
     schedulePersistActivity();
   };
